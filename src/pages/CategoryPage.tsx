@@ -1,10 +1,11 @@
-import { useParams } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 import Layout from "@/components/layout/Layout";
 import ArticleCard from "@/components/news/ArticleCard";
 import { articles, categories } from "@/lib/mockData";
 
 const CategoryPage = () => {
-  const { category } = useParams();
+  const location = useLocation();
+  const category = location.pathname.replace("/", "");
 
   const categoryMap: Record<string, string> = {
     nigeria: "Nigeria",
