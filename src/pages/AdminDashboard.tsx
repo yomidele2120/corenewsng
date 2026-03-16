@@ -1,43 +1,181 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { articles } from "@/lib/mockData";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 import { motion } from "framer-motion";
-import { RefreshCw, Sparkles, PenLine, Send, ChevronRight } from "lucide-react";
+import { RefreshCw, Sparkles, PenLine, Send, ChevronRight, LogOut, Loader2 } from "lucide-react";
+import { toast } from "@/hooks/use-toast";
 
-const mockAISuggestions = [
-  {
-    id: "ai-1",
-    headline: "ECOWAS Summit: West African Leaders Agree on Common Currency Timeline",
-    summary: "Leaders from 15 West African nations have agreed to a revised timeline for the introduction of the ECO, a single currency for the region, with implementation now set for 2028.",
-    source: "Reuters, AFP",
-    category: "World",
-    confidence: 92,
-  },
-  {
-    id: "ai-2",
-    headline: "Nigerian Fintech Sector Processes ₦12 Trillion in Q1 2026",
-    summary: "Nigeria's financial technology sector has processed over ₦12 trillion in transactions during the first quarter of 2026, marking a 45% increase year-over-year.",
-    source: "Bloomberg, TechCabal",
-    category: "Technology",
-    confidence: 88,
-  },
-  {
-    id: "ai-3",
-    headline: "Lagos State Unveils $500M Urban Rail Extension Plan",
-    summary: "The Lagos State Government has unveiled plans for a $500 million extension of the Blue Line rail system, connecting key economic zones across the megacity.",
-    source: "Channels TV, The Guardian Nigeria",
-    category: "Nigeria",
-    confidence: 95,
-  },
-];
+type Suggestion = {
+  id: string;
+  original_title: string;
+  original_summary: string | null;
+  ai_title: string | null;
+  ai_summary: string | null;
+  ai_content: string | null;
+  ai_headlines: any;
+  source_name: string | null;
+  source_url: string | null;
+  image_url: string | null;
+  category: string | null;
+  confidence: number | null;
+  status: string | null;
+  created_at: string | null;
+};
+
+type PublishedArticle = {
+  id: string;
+  title: string;
+  category: string;
+  author: string | null;
+  published_at: string | null;
+};
 
 const AdminDashboard = () => {
+  const { signOut } = useAuth();
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [publishedArticles, setPublishedArticles] = useState<PublishedArticle[]>([]);
   const [selectedSuggestion, setSelectedSuggestion] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"pulse" | "published">("pulse");
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const [isRewriting, setIsRewriting] = useState(false);
+  const [isGeneratingHeadlines, setIsGeneratingHeadlines] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
+
+  // Editable fields
+  const [editHeadline, setEditHeadline] = useState("");
+  const [editCategory, setEditCategory] = useState("");
+  const [editContent, setEditContent] = useState("");
+  const [editSummary, setEditSummary] = useState("");
+
+  const fetchSuggestions = async () => {
+    const { data } = await supabase
+      .from("ai_suggestions")
+      .select("*")
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(20);
+    setSuggestions((data as Suggestion[]) || []);
+  };
+
+  const fetchPublished = async () => {
+    const { data } = await supabase
+      .from("articles")
+      .select("id, title, category, author, published_at")
+      .eq("status", "published")
+      .order("published_at", { ascending: false })
+      .limit(20);
+    setPublishedArticles((data as PublishedArticle[]) || []);
+  };
+
+  useEffect(() => {
+    fetchSuggestions();
+    fetchPublished();
+  }, []);
+
+  // When selecting a suggestion, populate editor
+  useEffect(() => {
+    if (selectedSuggestion) {
+      const s = suggestions.find((x) => x.id === selectedSuggestion);
+      if (s) {
+        setEditHeadline(s.ai_title || s.original_title);
+        setEditCategory(s.category || "Nigeria");
+        setEditContent(s.ai_content || s.original_summary || "");
+        setEditSummary(s.ai_summary || s.original_summary || "");
+      }
+    }
+  }, [selectedSuggestion, suggestions]);
+
+  const runDiscovery = async () => {
+    setIsDiscovering(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("news-discovery");
+      if (error) throw error;
+      toast({ title: "Discovery Complete", description: data?.message || "News fetched successfully." });
+      await fetchSuggestions();
+    } catch (e: any) {
+      toast({ title: "Discovery Error", description: e.message, variant: "destructive" });
+    } finally {
+      setIsDiscovering(false);
+    }
+  };
+
+  const aiRewrite = async () => {
+    const s = suggestions.find((x) => x.id === selectedSuggestion);
+    if (!s) return;
+    setIsRewriting(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("ai-rewrite", {
+        body: { action: "rewrite", title: editHeadline, summary: editSummary, content: editContent },
+      });
+      if (error) throw error;
+      setEditContent(data.result);
+      toast({ title: "Article Rewritten" });
+    } catch (e: any) {
+      toast({ title: "Rewrite Error", description: e.message, variant: "destructive" });
+    } finally {
+      setIsRewriting(false);
+    }
+  };
+
+  const generateHeadlines = async () => {
+    setIsGeneratingHeadlines(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("ai-rewrite", {
+        body: { action: "headlines", title: editHeadline, summary: editSummary },
+      });
+      if (error) throw error;
+      const headlines = Array.isArray(data.result) ? data.result : [data.result];
+      // Update the suggestion's ai_headlines locally
+      setSuggestions((prev) =>
+        prev.map((s) => (s.id === selectedSuggestion ? { ...s, ai_headlines: headlines } : s))
+      );
+      toast({ title: "Headlines Generated", description: `${headlines.length} headlines ready.` });
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setIsGeneratingHeadlines(false);
+    }
+  };
+
+  const publishStory = async () => {
+    const s = suggestions.find((x) => x.id === selectedSuggestion);
+    if (!s) return;
+    setIsPublishing(true);
+    try {
+      // Insert into articles
+      const { error: insertError } = await supabase.from("articles").insert({
+        title: editHeadline,
+        summary: editSummary,
+        content: editContent,
+        category: editCategory,
+        image_url: s.image_url,
+        source_url: s.source_url,
+        source_name: s.source_name,
+        status: "published",
+        published_at: new Date().toISOString(),
+      });
+      if (insertError) throw insertError;
+
+      // Mark suggestion as published
+      await supabase.from("ai_suggestions").update({ status: "published" }).eq("id", s.id);
+
+      toast({ title: "Story Published!", description: "Article is now live on the site." });
+      setSelectedSuggestion(null);
+      await Promise.all([fetchSuggestions(), fetchPublished()]);
+    } catch (e: any) {
+      toast({ title: "Publish Error", description: e.message, variant: "destructive" });
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  const selected = suggestions.find((s) => s.id === selectedSuggestion);
+  const headlines = selected?.ai_headlines;
+  const headlinesList = Array.isArray(headlines) ? headlines : [];
 
   return (
     <div className="min-h-screen bg-muted/30">
-      {/* Admin header */}
       <header className="bg-background border-b border-border">
         <div className="container flex items-center justify-between py-4">
           <div className="flex items-center gap-4">
@@ -48,14 +186,18 @@ const AdminDashboard = () => {
               Admin Dashboard
             </span>
           </div>
-          <Link to="/" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-            ← Back to Site
-          </Link>
+          <div className="flex items-center gap-4">
+            <Link to="/" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+              ← Back to Site
+            </Link>
+            <button onClick={signOut} className="ghost-button flex items-center gap-2 text-xs">
+              <LogOut className="h-3 w-3" /> Sign Out
+            </button>
+          </div>
         </div>
       </header>
 
       <div className="container py-8">
-        {/* Tabs */}
         <div className="flex gap-1 mb-8 border-b border-border">
           <button
             onClick={() => setActiveTab("pulse")}
@@ -74,17 +216,16 @@ const AdminDashboard = () => {
               activeTab === "published" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground"
             }`}
           >
-            Published Stories
+            Published Stories ({publishedArticles.length})
           </button>
         </div>
 
         {activeTab === "pulse" && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-            {/* AI Suggestions List */}
             <div className="lg:col-span-5">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
-                  AI Suggestions
+                  AI Suggestions ({suggestions.length})
                 </h2>
                 <div className="flex items-center gap-2">
                   <motion.div
@@ -92,12 +233,18 @@ const AdminDashboard = () => {
                     transition={{ duration: 2, repeat: Infinity }}
                     className="h-2 w-2 rounded-full bg-green-500"
                   />
-                  <span className="text-xs text-muted-foreground">Live · Updates every 10 min</span>
+                  <span className="text-xs text-muted-foreground">Live</span>
                 </div>
               </div>
 
-              <div className="space-y-0">
-                {mockAISuggestions.map((s) => (
+              {suggestions.length === 0 && (
+                <div className="text-center py-12 text-muted-foreground">
+                  <p className="text-sm mb-4">No suggestions yet. Run discovery to fetch news.</p>
+                </div>
+              )}
+
+              <div className="space-y-0 max-h-[600px] overflow-y-auto">
+                {suggestions.map((s) => (
                   <motion.div
                     key={s.id}
                     whileHover={{ x: 4 }}
@@ -108,97 +255,145 @@ const AdminDashboard = () => {
                   >
                     <div className="flex items-center justify-between mb-1">
                       <span className="category-tag text-[10px]">{s.category}</span>
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                        s.confidence >= 90
-                          ? "bg-green-100 text-green-800"
-                          : s.confidence >= 80
-                          ? "bg-yellow-100 text-yellow-800"
-                          : "bg-red-100 text-red-800"
-                      }`}>
+                      <span
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                          (s.confidence || 0) >= 90
+                            ? "bg-green-100 text-green-800"
+                            : (s.confidence || 0) >= 80
+                            ? "bg-yellow-100 text-yellow-800"
+                            : "bg-red-100 text-red-800"
+                        }`}
+                      >
                         {s.confidence}% confidence
                       </span>
                     </div>
-                    <h3 className="text-sm font-serif font-semibold leading-snug">{s.headline}</h3>
-                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{s.summary}</p>
-                    <p className="text-[10px] text-muted-foreground mt-1">Sources: {s.source}</p>
+                    <h3 className="text-sm font-serif font-semibold leading-snug">
+                      {s.ai_title || s.original_title}
+                    </h3>
+                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                      {s.ai_summary || s.original_summary}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground mt-1">Source: {s.source_name}</p>
                   </motion.div>
                 ))}
               </div>
 
-              <button className="ghost-button mt-4 w-full flex items-center justify-center gap-2">
-                <RefreshCw className="h-3 w-3" />
-                Refresh Suggestions
+              <button
+                onClick={runDiscovery}
+                disabled={isDiscovering}
+                className="ghost-button mt-4 w-full flex items-center justify-center gap-2"
+              >
+                {isDiscovering ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                {isDiscovering ? "Discovering..." : "Run AI Discovery"}
               </button>
             </div>
 
-            {/* Editor Panel */}
             <div className="lg:col-span-7 border-l-0 lg:border-l border-border lg:pl-8">
-              {selectedSuggestion ? (
-                (() => {
-                  const suggestion = mockAISuggestions.find((s) => s.id === selectedSuggestion);
-                  if (!suggestion) return null;
-                  return (
-                    <div>
-                      <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-4 pb-2 border-b border-border">
-                        Story Editor
-                      </h2>
+              {selected ? (
+                <div>
+                  <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-4 pb-2 border-b border-border">
+                    Story Editor
+                  </h2>
 
-                      {/* AI Actions */}
-                      <div className="flex gap-2 mb-6 flex-wrap">
-                        <button className="ghost-button flex items-center gap-2 text-xs">
-                          <Sparkles className="h-3 w-3" />
-                          Generate Headlines
-                        </button>
-                        <button className="ghost-button flex items-center gap-2 text-xs">
-                          <PenLine className="h-3 w-3" />
-                          Journalistic Rewrite
-                        </button>
-                      </div>
-
-                      <div className="space-y-4">
-                        <div>
-                          <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground block mb-1">Headline</label>
-                          <input
-                            defaultValue={suggestion.headline}
-                            className="w-full border border-border px-3 py-2 text-sm font-serif font-semibold focus:outline-none focus:border-foreground transition-colors bg-background"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground block mb-1">Category</label>
-                          <select
-                            defaultValue={suggestion.category}
-                            className="w-full border border-border px-3 py-2 text-sm focus:outline-none focus:border-foreground transition-colors bg-background"
+                  {/* AI generated headlines */}
+                  {headlinesList.length > 0 && (
+                    <div className="mb-4 p-3 bg-muted/50 border border-border">
+                      <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-2">
+                        AI Headlines (click to use)
+                      </p>
+                      <div className="space-y-1">
+                        {headlinesList.map((h: string, i: number) => (
+                          <button
+                            key={i}
+                            onClick={() => setEditHeadline(h)}
+                            className="block text-left text-sm hover:text-primary transition-colors w-full"
                           >
-                            <option>Nigeria</option>
-                            <option>World</option>
-                            <option>Business & Economy</option>
-                            <option>Technology</option>
-                            <option>Investigations</option>
-                            <option>Opinions</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground block mb-1">Article Body</label>
-                          <textarea
-                            rows={10}
-                            defaultValue={suggestion.summary}
-                            className="w-full border border-border px-3 py-2 text-sm focus:outline-none focus:border-foreground transition-colors bg-background resize-none leading-relaxed"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground block mb-1">Featured Image</label>
-                          <div className="border border-dashed border-border p-8 text-center">
-                            <p className="text-sm text-muted-foreground">Drop image here or click to upload</p>
-                          </div>
-                        </div>
-                        <button className="bg-foreground text-background px-6 py-3 text-sm font-bold uppercase tracking-wider hover:bg-foreground/90 transition-colors flex items-center gap-2">
-                          <Send className="h-4 w-4" />
-                          Publish Story
-                        </button>
+                            {i + 1}. {h}
+                          </button>
+                        ))}
                       </div>
                     </div>
-                  );
-                })()
+                  )}
+
+                  <div className="flex gap-2 mb-6 flex-wrap">
+                    <button
+                      onClick={generateHeadlines}
+                      disabled={isGeneratingHeadlines}
+                      className="ghost-button flex items-center gap-2 text-xs"
+                    >
+                      {isGeneratingHeadlines ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                      Generate Headlines
+                    </button>
+                    <button
+                      onClick={aiRewrite}
+                      disabled={isRewriting}
+                      className="ghost-button flex items-center gap-2 text-xs"
+                    >
+                      {isRewriting ? <Loader2 className="h-3 w-3 animate-spin" /> : <PenLine className="h-3 w-3" />}
+                      Journalistic Rewrite
+                    </button>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground block mb-1">Headline</label>
+                      <input
+                        value={editHeadline}
+                        onChange={(e) => setEditHeadline(e.target.value)}
+                        className="w-full border border-border px-3 py-2 text-sm font-serif font-semibold focus:outline-none focus:border-foreground transition-colors bg-background"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground block mb-1">Category</label>
+                      <select
+                        value={editCategory}
+                        onChange={(e) => setEditCategory(e.target.value)}
+                        className="w-full border border-border px-3 py-2 text-sm focus:outline-none focus:border-foreground transition-colors bg-background"
+                      >
+                        <option>Nigeria</option>
+                        <option>World</option>
+                        <option>Business & Economy</option>
+                        <option>Technology</option>
+                        <option>Investigations</option>
+                        <option>Opinions</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground block mb-1">Summary</label>
+                      <textarea
+                        rows={3}
+                        value={editSummary}
+                        onChange={(e) => setEditSummary(e.target.value)}
+                        className="w-full border border-border px-3 py-2 text-sm focus:outline-none focus:border-foreground transition-colors bg-background resize-none leading-relaxed"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground block mb-1">Article Body</label>
+                      <textarea
+                        rows={10}
+                        value={editContent}
+                        onChange={(e) => setEditContent(e.target.value)}
+                        className="w-full border border-border px-3 py-2 text-sm focus:outline-none focus:border-foreground transition-colors bg-background resize-none leading-relaxed"
+                      />
+                    </div>
+                    {selected.source_url && (
+                      <div>
+                        <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground block mb-1">Source</label>
+                        <a href={selected.source_url} target="_blank" rel="noopener noreferrer" className="text-sm text-accent hover:underline">
+                          {selected.source_name} →
+                        </a>
+                      </div>
+                    )}
+                    <button
+                      onClick={publishStory}
+                      disabled={isPublishing}
+                      className="bg-foreground text-background px-6 py-3 text-sm font-bold uppercase tracking-wider hover:bg-foreground/90 transition-colors flex items-center gap-2 disabled:opacity-50"
+                    >
+                      {isPublishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                      {isPublishing ? "Publishing..." : "Publish Story"}
+                    </button>
+                  </div>
+                </div>
               ) : (
                 <div className="flex items-center justify-center h-full min-h-[400px] text-muted-foreground">
                   <div className="text-center">
@@ -213,14 +408,21 @@ const AdminDashboard = () => {
 
         {activeTab === "published" && (
           <div className="space-y-0">
-            {articles.slice(0, 6).map((a) => (
+            {publishedArticles.length === 0 && (
+              <p className="text-sm text-muted-foreground text-center py-12">No published articles yet.</p>
+            )}
+            {publishedArticles.map((a) => (
               <div key={a.id} className="flex items-center justify-between border-b border-border py-4">
                 <div className="flex-1">
                   <span className="category-tag text-[10px] mb-1 block">{a.category}</span>
                   <h3 className="text-sm font-serif font-semibold">{a.title}</h3>
-                  <span className="meta-text text-xs">{a.author} · {a.date}</span>
+                  <span className="meta-text text-xs">
+                    {a.author} · {a.published_at ? new Date(a.published_at).toLocaleDateString() : "Draft"}
+                  </span>
                 </div>
-                <Link to={`/article/${a.id}`} className="ghost-button text-xs ml-4">View</Link>
+                <Link to={`/article/${a.id}`} className="ghost-button text-xs ml-4">
+                  View
+                </Link>
               </div>
             ))}
           </div>
