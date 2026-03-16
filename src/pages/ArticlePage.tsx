@@ -1,13 +1,68 @@
 import { useParams, Link } from "react-router-dom";
+import { useState, useEffect } from "react";
 import Layout from "@/components/layout/Layout";
-import { articles } from "@/lib/mockData";
+import { supabase } from "@/integrations/supabase/client";
+import { articles as mockArticles, type Article } from "@/lib/mockData";
 import { Share2, Facebook, Twitter } from "lucide-react";
 import ArticleCard from "@/components/news/ArticleCard";
 
 const ArticlePage = () => {
   const { id } = useParams();
-  const article = articles.find((a) => a.id === id);
-  const relatedArticles = articles.filter((a) => a.id !== id && a.category === article?.category).slice(0, 3);
+  const [article, setArticle] = useState<Article | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchArticle = async () => {
+      // Try mock data first
+      const mock = mockArticles.find((a) => a.id === id);
+      if (mock) {
+        setArticle(mock);
+        setLoading(false);
+        return;
+      }
+
+      // Try database
+      const { data } = await supabase
+        .from("articles")
+        .select("*")
+        .eq("id", id!)
+        .maybeSingle();
+
+      if (data) {
+        setArticle({
+          id: data.id,
+          title: data.title,
+          summary: data.summary || "",
+          content: data.content || "",
+          category: data.category,
+          subcategory: data.subcategory || undefined,
+          author: data.author || "CoreNews Staff",
+          date: data.published_at ? new Date(data.published_at).toLocaleDateString() : "",
+          imageUrl: data.image_url || "",
+          readTime: data.read_time || "5 min",
+          isBreaking: data.is_breaking || false,
+          isFeatured: data.is_featured || false,
+          isTrending: data.is_trending || false,
+          isOpinion: data.is_opinion || false,
+        });
+      }
+      setLoading(false);
+    };
+
+    fetchArticle();
+  }, [id]);
+
+  const relatedArticles = mockArticles.filter((a) => a.id !== id && a.category === article?.category).slice(0, 3);
+
+  if (loading) {
+    return (
+      <Layout>
+        <div className="container py-16 text-center">
+          <p className="text-muted-foreground">Loading...</p>
+        </div>
+      </Layout>
+    );
+  }
 
   if (!article) {
     return (
@@ -20,13 +75,12 @@ const ArticlePage = () => {
     );
   }
 
-  const bodyContent = article.content || article.summary + "\n\n" + "This is a developing story. CoreNews will provide updates as more information becomes available. Our editorial team is working to verify all facts and figures presented in this report.\n\nFor the latest updates, follow CoreNews on social media or subscribe to our newsletter.";
+  const bodyContent = article.content || article.summary + "\n\nThis is a developing story. CoreNews will provide updates as more information becomes available.";
 
   return (
     <Layout>
       <article className="container py-8 md:py-12">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          {/* Main content */}
           <div className="lg:col-span-8">
             {article.isOpinion && (
               <span className="text-xs font-bold uppercase tracking-widest text-accent mb-2 block">Opinion</span>
@@ -41,7 +95,6 @@ const ArticlePage = () => {
               <span className="meta-text">{article.readTime} read</span>
             </div>
 
-            {/* Share bar */}
             <div className="flex items-center gap-3 py-4 border-b border-border">
               <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Share</span>
               <button className="p-2 hover:bg-muted rounded transition-colors" aria-label="Share">
@@ -55,21 +108,25 @@ const ArticlePage = () => {
               </button>
             </div>
 
-            {/* Featured image */}
-            <div className="mt-6 aspect-[16/9] bg-muted">
-              <div className="w-full h-full bg-gradient-to-br from-muted to-border flex items-center justify-center">
-                <span className="text-muted-foreground text-sm">Featured Image</span>
+            {article.imageUrl && (
+              <div className="mt-6 aspect-[16/9] bg-muted overflow-hidden">
+                <img src={article.imageUrl} alt={article.title} className="w-full h-full object-cover" />
               </div>
-            </div>
+            )}
+            {!article.imageUrl && (
+              <div className="mt-6 aspect-[16/9] bg-muted">
+                <div className="w-full h-full bg-gradient-to-br from-muted to-border flex items-center justify-center">
+                  <span className="text-muted-foreground text-sm">Featured Image</span>
+                </div>
+              </div>
+            )}
 
-            {/* Article body */}
             <div className="mt-8 prose-article mx-auto lg:mx-0">
               {bodyContent.split("\n\n").map((p, i) => (
                 <p key={i} className="mb-4 text-foreground/90">{p}</p>
               ))}
             </div>
 
-            {/* Tags */}
             <div className="mt-8 pt-6 border-t border-border flex items-center gap-2 flex-wrap">
               <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground mr-2">Tags</span>
               {[article.category, article.subcategory, "Nigeria"].filter(Boolean).map((tag) => (
@@ -77,13 +134,11 @@ const ArticlePage = () => {
               ))}
             </div>
 
-            {/* Augmented by AI label */}
             <div className="mt-4 text-xs text-muted-foreground italic">
               Augmented by CoreNews AI
             </div>
           </div>
 
-          {/* Sidebar */}
           <aside className="lg:col-span-4 lg:border-l border-border lg:pl-8">
             <div className="sticky top-8">
               <h3 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-4 pb-2 border-b border-border">
@@ -95,7 +150,7 @@ const ArticlePage = () => {
                     <ArticleCard key={a.id} article={a} variant="compact" />
                   ))
                 ) : (
-                  articles.slice(0, 3).map((a) => (
+                  mockArticles.slice(0, 3).map((a) => (
                     <ArticleCard key={a.id} article={a} variant="compact" />
                   ))
                 )}
