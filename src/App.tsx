@@ -28,12 +28,13 @@ const App = () => (
             <Route path="/article/:id" element={<ArticlePage />} />
             <Route path="/nigeria" element={<CategoryPage />} />
             <Route path="/world" element={<CategoryPage />} />
+            <Route path="/politics" element={<CategoryPage />} />
             <Route path="/business" element={<CategoryPage />} />
             <Route path="/business-economy" element={<CategoryPage />} />
             <Route path="/technology" element={<CategoryPage />} />
+            <Route path="/sports" element={<CategoryPage />} />
             <Route path="/investigations" element={<CategoryPage />} />
             <Route path="/opinions" element={<CategoryPage />} />
-            <Route path="/videos" element={<CategoryPage />} />
             <Route path="/about" element={<AboutPage />} />
             <Route path="/contact" element={<ContactPage />} />
             <Route path="/admin/login" element={<AdminLogin />} />
