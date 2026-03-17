@@ -6,9 +6,19 @@ import { articles as mockArticles, type Article } from "@/lib/mockData";
 import { Share2, Facebook, Twitter } from "lucide-react";
 import ArticleCard from "@/components/news/ArticleCard";
 
+type MediaItem = {
+  id: string;
+  media_url: string;
+  media_type: string;
+  is_featured: boolean;
+  position: number;
+};
+
 const ArticlePage = () => {
   const { id } = useParams();
   const [article, setArticle] = useState<Article | null>(null);
+  const [media, setMedia] = useState<MediaItem[]>([]);
+  const [relatedFromDb, setRelatedFromDb] = useState<Article[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -45,6 +55,45 @@ const ArticlePage = () => {
           isTrending: data.is_trending || false,
           isOpinion: data.is_opinion || false,
         });
+
+        // Fetch additional media
+        const { data: mediaData } = await supabase
+          .from("article_media")
+          .select("*")
+          .eq("article_id", data.id)
+          .order("position", { ascending: true });
+        if (mediaData) setMedia(mediaData as MediaItem[]);
+
+        // Fetch related articles from DB
+        const { data: related } = await supabase
+          .from("articles")
+          .select("*")
+          .eq("status", "published")
+          .eq("category", data.category)
+          .neq("id", data.id)
+          .limit(3);
+        if (related) {
+          setRelatedFromDb(related.map((r: any) => ({
+            id: r.id,
+            title: r.title,
+            summary: r.summary || "",
+            content: r.content || "",
+            category: r.category,
+            author: r.author || "CoreNews Staff",
+            date: r.published_at ? new Date(r.published_at).toLocaleDateString() : "",
+            imageUrl: r.image_url || "",
+            readTime: r.read_time || "5 min",
+            isBreaking: r.is_breaking || false,
+            isFeatured: r.is_featured || false,
+            isTrending: r.is_trending || false,
+            isOpinion: r.is_opinion || false,
+          })));
+        }
+
+        // Record view for trending
+        const sessionId = sessionStorage.getItem("view_session") || crypto.randomUUID();
+        sessionStorage.setItem("view_session", sessionId);
+        await supabase.from("article_views").insert({ article_id: data.id, session_id: sessionId });
       }
       setLoading(false);
     };
@@ -52,7 +101,9 @@ const ArticlePage = () => {
     fetchArticle();
   }, [id]);
 
-  const relatedArticles = mockArticles.filter((a) => a.id !== id && a.category === article?.category).slice(0, 3);
+  const relatedArticles = relatedFromDb.length > 0
+    ? relatedFromDb
+    : mockArticles.filter((a) => a.id !== id && a.category === article?.category).slice(0, 3);
 
   if (loading) {
     return (
@@ -76,6 +127,27 @@ const ArticlePage = () => {
   }
 
   const bodyContent = article.content || article.summary + "\n\nThis is a developing story. CoreNews will provide updates as more information becomes available.";
+
+  // Get non-featured media for gallery
+  const galleryMedia = media.filter((m) => !m.is_featured);
+
+  const renderMediaEmbed = (m: MediaItem) => {
+    if (m.media_type === "youtube") {
+      const videoId = m.media_url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&]+)/)?.[1];
+      return videoId ? (
+        <iframe
+          src={`https://www.youtube.com/embed/${videoId}`}
+          className="w-full aspect-video"
+          allowFullScreen
+          title="Video"
+        />
+      ) : null;
+    }
+    if (m.media_type === "video") {
+      return <video src={m.media_url} controls className="w-full aspect-video" />;
+    }
+    return <img src={m.media_url} alt="" className="w-full object-cover" loading="lazy" />;
+  };
 
   return (
     <Layout>
@@ -108,12 +180,12 @@ const ArticlePage = () => {
               </button>
             </div>
 
-            {article.imageUrl && (
+            {/* Featured Image */}
+            {article.imageUrl ? (
               <div className="mt-6 aspect-[16/9] bg-muted overflow-hidden">
                 <img src={article.imageUrl} alt={article.title} className="w-full h-full object-cover" />
               </div>
-            )}
-            {!article.imageUrl && (
+            ) : (
               <div className="mt-6 aspect-[16/9] bg-muted">
                 <div className="w-full h-full bg-gradient-to-br from-muted to-border flex items-center justify-center">
                   <span className="text-muted-foreground text-sm">Featured Image</span>
@@ -126,6 +198,20 @@ const ArticlePage = () => {
                 <p key={i} className="mb-4 text-foreground/90">{p}</p>
               ))}
             </div>
+
+            {/* Media Gallery */}
+            {galleryMedia.length > 0 && (
+              <div className="mt-8 border-t border-border pt-6">
+                <h3 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-4">Media Gallery</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {galleryMedia.map((m) => (
+                    <div key={m.id} className="overflow-hidden bg-muted">
+                      {renderMediaEmbed(m)}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="mt-8 pt-6 border-t border-border flex items-center gap-2 flex-wrap">
               <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground mr-2">Tags</span>
